@@ -56,15 +56,15 @@
 +
 +#define WM_BUTTON_LAYOUT "button-layout"
 +
-+#define DEFAULT_BUTTON_LEFT_LAYOUT "close:"
-+#define MAXIMIZE_BUTTON_LEFT_LAYOUT "maximize,close:"
-+#define MINIMIZE_BUTTON_LEFT_LAYOUT "minimize,close:"
-+#define EXTENDED_BUTTON_LEFT_LAYOUT "minimize,maximize,close:"
++#define DEFAULT_BUTTON_LEFT_LAYOUT "close:appmenu"
++#define MAXIMIZE_BUTTON_LEFT_LAYOUT "close,maximize:appmenu"
++#define MINIMIZE_BUTTON_LEFT_LAYOUT "close,minimize:appmenu"
++#define EXTENDED_BUTTON_LEFT_LAYOUT "close,minimize,maximize:appmenu"
 +
-+#define DEFAULT_BUTTON_RIGHT_LAYOUT ":close"
-+#define MAXIMIZE_BUTTON_RIGHT_LAYOUT ":maximize,close"
-+#define MINIMIZE_BUTTON_RIGHT_LAYOUT ":minimize,close"
-+#define EXTENDED_BUTTON_RIGHT_LAYOUT ":minimize,maximize,close"
++#define DEFAULT_BUTTON_RIGHT_LAYOUT "appmenu:close"
++#define MAXIMIZE_BUTTON_RIGHT_LAYOUT "appmenu:maximize,close"
++#define MINIMIZE_BUTTON_RIGHT_LAYOUT "appmenu:minimize,close"
++#define EXTENDED_BUTTON_RIGHT_LAYOUT "appmenu:minimize,maximize,close"
 +
 +#define WM_FOCUS_MODE "focus-mode"
 +
