@@ -1,0 +1,690 @@
+--- a/panels/meson.build
++++ b/panels/meson.build
+@@ -29,7 +29,8 @@
+   'universal-access',
+   'usage',
+   'user-accounts',
+- 'wwan',
++  'windows',
++  'wwan',
+ ]
+ 
+ if host_is_linux
+--- /dev/null
++++ b/panels/windows/assets/right.svg
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="655.237" height="573.774"><path d="M32.031 0C14.478 0 0 14.478 0 32.031v509.711c0 17.554 14.478 32.031 32.031 32.031h591.176c17.553 0 32.03-14.478 32.03-32.03V32.03c0-17.553-14.478-32.031-32.03-32.031H32.03Zm0 22.076h591.176c5.706 0 9.955 4.25 9.955 9.955v67.463H22.076V32.031c0-5.706 4.25-9.955 9.955-9.955zm573.215 22.043-10.037 9.914-10.043-9.896-.15.144h-6.357v6.436l-.106.103 9.961 9.854-9.96 9.84.146.144h-.04v6.479h6.444l.063.062.062-.062h.082v-.084l9.897-9.785 10.033 9.916.062-.065h6.522v-6.476h-.125l.146-.147-9.96-9.84 9.96-9.851-.062-.063h.04v-6.475h-6.435l-.144-.147zm-501.14 60.89h529.055v436.733c0 5.706-4.25 9.955-9.957 9.955H32.03c-5.706 0-9.955-4.249-9.955-9.955V105.01Z" style="color:#000;font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:medium;line-height:normal;font-family:sans-serif;font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-feature-settings:normal;text-indent:0;text-align:start;text-decoration:none;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:start;white-space:normal;shape-padding:0;clip-rule:nonzero;display:inline;overflow:visible;visibility:visible;opacity:1;isolation:auto;mix-blend-mode:normal;color-interpolation:sRGB;color-interpolation-filters:linearRGB;solid-color:#000;solid-opacity:1;vector-effect:none;fill:#3584e4;fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:22.0738;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker:none;color-rendering:auto;image-rendering:auto;shape-rendering:auto;text-rendering:auto;enable-background:new"/></svg>
+\ No newline at end of file
+--- /dev/null
++++ b/panels/windows/assets/left.svg
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="655.237" height="573.774"><path d="M623.207 0c17.553 0 32.03 14.478 32.03 32.031v509.711c0 17.554-14.478 32.031-32.03 32.031H32.03c-17.552 0-32.03-14.478-32.03-32.03V32.03C0 14.477 14.478-.001 32.031-.001h591.177zm0 22.076H32.03c-5.706 0-9.955 4.25-9.955 9.955v67.463h611.086V32.031c0-5.706-4.25-9.955-9.955-9.955zM49.991 44.119l10.037 9.914 10.043-9.896.149.144h6.357v6.436l.106.103-9.961 9.854 9.96 9.84-.146.144h.041v6.479h-6.445l-.063.062-.062-.062h-.082v-.084l-9.897-9.785-10.033 9.916-.062-.065h-6.522v-6.476h.125l-.146-.147 9.96-9.84-9.96-9.851.062-.063h-.04v-6.475h6.435l.144-.147zm501.139 60.89H22.076v436.733c0 5.706 4.251 9.955 9.957 9.955h591.175c5.706 0 9.955-4.249 9.955-9.955V105.01Z" style="color:#000;font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:medium;line-height:normal;font-family:sans-serif;font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-feature-settings:normal;text-indent:0;text-align:start;text-decoration:none;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:start;white-space:normal;shape-padding:0;clip-rule:nonzero;display:inline;overflow:visible;visibility:visible;opacity:1;isolation:auto;mix-blend-mode:normal;color-interpolation:sRGB;color-interpolation-filters:linearRGB;solid-color:#000;solid-opacity:1;vector-effect:none;fill:#3584e4;fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:22.0738;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker:none;color-rendering:auto;image-rendering:auto;shape-rendering:auto;text-rendering:auto;enable-background:new"/></svg>
+\ No newline at end of file
+--- /dev/null
++++ b/panels/windows/cc-windows-panel.c
+@@ -0,0 +1,308 @@
++/* cc-windows-panel.c
++ *
++ * Copyright 2022 Muqtadir <muqtxdir@gmail.com>
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include <gio/gdesktopappinfo.h>
++
++#include "cc-windows-panel.h"
++#include "cc-list-row.h"
++#include "cc-windows-resources.h"
++#include "shell/cc-application.h"
++#include "shell/cc-object-storage.h"
++
++#include <gdesktop-enums.h>
++
++
++#define WM_BUTTON_LAYOUT "button-layout"
++
++#define DEFAULT_BUTTON_LEFT_LAYOUT "close:"
++#define MAXIMIZE_BUTTON_LEFT_LAYOUT "maximize,close:"
++#define MINIMIZE_BUTTON_LEFT_LAYOUT "minimize,close:"
++#define EXTENDED_BUTTON_LEFT_LAYOUT "minimize,maximize,close:"
++
++#define DEFAULT_BUTTON_RIGHT_LAYOUT ":close"
++#define MAXIMIZE_BUTTON_RIGHT_LAYOUT ":maximize,close"
++#define MINIMIZE_BUTTON_RIGHT_LAYOUT ":minimize,close"
++#define EXTENDED_BUTTON_RIGHT_LAYOUT ":minimize,maximize,close"
++
++#define WM_FOCUS_MODE "focus-mode"
++
++struct _CcWindowsPanel
++{
++  CcPanel          parent_instance;
++
++  GSettings        *mutter_settings;
++  GSettings        *wm_settings;
++
++  GtkCheckButton   *left_placement;
++  GtkCheckButton   *right_placement;
++
++  GtkSwitch        *minimize_switch;
++  GtkSwitch        *maximize_switch;
++
++  GtkCheckButton   *click_to_focus_radio;
++  GtkCheckButton   *focus_on_hover_radio;
++  GtkCheckButton   *secondary_click_radio;
++
++  CcListRow        *attach_modal_dialogs_switch;
++  CcListRow        *center_new_windows_switch;
++};
++
++CC_PANEL_REGISTER (CcWindowsPanel, cc_windows_panel)
++
++static void
++on_option_click_released_cb (GtkGestureClick *self,
++                             gint             n_press,
++                             gdouble          x,
++                             gdouble          y,
++                             GtkCheckButton  *check_button)
++{
++  gtk_widget_activate (GTK_WIDGET (check_button));
++}
++
++static void
++cc_windows_panel_finalize (GObject *object)
++{
++  CcWindowsPanel *self = (CcWindowsPanel *)object;
++
++  g_clear_object (&self->mutter_settings);
++  g_clear_object (&self->wm_settings);
++
++  G_OBJECT_CLASS (cc_windows_panel_parent_class)->finalize (object);
++}
++
++static void
++reload_titlebar_layout (CcWindowsPanel *self)
++{
++  gchar *titlebar_buttons=NULL;
++
++  titlebar_buttons = g_settings_get_string (self->wm_settings, WM_BUTTON_LAYOUT);
++
++  if ((g_ascii_strcasecmp (titlebar_buttons, DEFAULT_BUTTON_RIGHT_LAYOUT) == 0))
++  {
++    gtk_check_button_set_active (self->right_placement, TRUE);
++    gtk_switch_set_active (self->minimize_switch, FALSE);
++    gtk_switch_set_active (self->maximize_switch, FALSE);
++  }
++  else if ((g_ascii_strcasecmp (titlebar_buttons, DEFAULT_BUTTON_LEFT_LAYOUT) == 0))
++  {
++    gtk_check_button_set_active (self->left_placement, TRUE);
++    gtk_switch_set_active (self->minimize_switch, FALSE);
++    gtk_switch_set_active (self->maximize_switch, FALSE);
++  }  
++
++  else if ((g_ascii_strcasecmp (titlebar_buttons, EXTENDED_BUTTON_RIGHT_LAYOUT) == 0))
++  {
++    gtk_check_button_set_active (self->right_placement, TRUE);
++    gtk_switch_set_active (self->minimize_switch, TRUE);
++    gtk_switch_set_active (self->maximize_switch, TRUE);
++  }
++  else if ((g_ascii_strcasecmp (titlebar_buttons, EXTENDED_BUTTON_LEFT_LAYOUT) == 0))
++  {
++    gtk_check_button_set_active (self->left_placement, TRUE);
++    gtk_switch_set_active (self->minimize_switch, TRUE);
++    gtk_switch_set_active (self->maximize_switch, TRUE);
++  }
++
++  else if ((g_ascii_strcasecmp (titlebar_buttons, MINIMIZE_BUTTON_RIGHT_LAYOUT) == 0))
++  {
++    gtk_check_button_set_active (self->right_placement, TRUE);
++    gtk_switch_set_active (self->minimize_switch, TRUE);
++    gtk_switch_set_active (self->maximize_switch, FALSE);
++  }
++  else if ((g_ascii_strcasecmp (titlebar_buttons, MINIMIZE_BUTTON_LEFT_LAYOUT) == 0))
++  {
++    gtk_check_button_set_active (self->left_placement, TRUE);
++    gtk_switch_set_active (self->minimize_switch, TRUE);
++    gtk_switch_set_active (self->maximize_switch, FALSE);
++  }
++
++  else if ((g_ascii_strcasecmp (titlebar_buttons, MAXIMIZE_BUTTON_RIGHT_LAYOUT) == 0))
++  {
++    gtk_check_button_set_active (self->right_placement, TRUE);
++    gtk_switch_set_active (self->minimize_switch, FALSE);
++    gtk_switch_set_active (self->maximize_switch, TRUE);
++  }
++  else if ((g_ascii_strcasecmp (titlebar_buttons, MAXIMIZE_BUTTON_LEFT_LAYOUT) == 0))
++  {
++    gtk_check_button_set_active (self->left_placement, TRUE);
++    gtk_switch_set_active (self->minimize_switch, FALSE);
++    gtk_switch_set_active (self->maximize_switch, TRUE);
++  }
++}
++
++static void
++on_titlebar_placement_checkbutton_active_cb (CcWindowsPanel *self)
++{
++  if (gtk_check_button_get_active (self->left_placement) && !gtk_check_button_get_active (self->right_placement))
++  {
++    if (gtk_switch_get_active (self->minimize_switch) && gtk_switch_get_active (self->maximize_switch))
++    g_settings_set_string (self->wm_settings, WM_BUTTON_LAYOUT, EXTENDED_BUTTON_LEFT_LAYOUT);
++  else if (!gtk_switch_get_active (self->minimize_switch) && !gtk_switch_get_active (self->maximize_switch))
++    g_settings_set_string (self->wm_settings, WM_BUTTON_LAYOUT, DEFAULT_BUTTON_LEFT_LAYOUT);
++  else if (gtk_switch_get_active (self->minimize_switch))
++    g_settings_set_string (self->wm_settings, WM_BUTTON_LAYOUT, MINIMIZE_BUTTON_LEFT_LAYOUT);
++  else if (gtk_switch_get_active (self->maximize_switch))
++    g_settings_set_string (self->wm_settings, WM_BUTTON_LAYOUT, MAXIMIZE_BUTTON_LEFT_LAYOUT);
++  }
++
++  else if (!gtk_check_button_get_active (self->left_placement) && gtk_check_button_get_active (self->right_placement))
++  {
++    if (gtk_switch_get_active (self->minimize_switch) && gtk_switch_get_active (self->maximize_switch))
++    g_settings_set_string (self->wm_settings, WM_BUTTON_LAYOUT, EXTENDED_BUTTON_RIGHT_LAYOUT);
++  else if (!gtk_switch_get_active (self->minimize_switch) && !gtk_switch_get_active (self->maximize_switch))
++    g_settings_set_string (self->wm_settings, WM_BUTTON_LAYOUT, DEFAULT_BUTTON_RIGHT_LAYOUT);
++  else if (gtk_switch_get_active (self->minimize_switch))
++    g_settings_set_string (self->wm_settings, WM_BUTTON_LAYOUT, MINIMIZE_BUTTON_RIGHT_LAYOUT);
++  else if (gtk_switch_get_active (self->maximize_switch))
++    g_settings_set_string (self->wm_settings, WM_BUTTON_LAYOUT, MAXIMIZE_BUTTON_RIGHT_LAYOUT);
++  }
++  
++}
++
++static void
++reload_focus_toggles (CcWindowsPanel *self)
++{
++  GDesktopFocusMode focus_mode;
++
++  focus_mode = g_settings_get_enum (self->wm_settings, WM_FOCUS_MODE);
++
++  if (focus_mode == G_DESKTOP_FOCUS_MODE_CLICK)
++      gtk_check_button_set_active (self->click_to_focus_radio, TRUE);
++  else if (focus_mode == G_DESKTOP_FOCUS_MODE_SLOPPY)
++      gtk_check_button_set_active (self->focus_on_hover_radio, TRUE);
++  else if (focus_mode == G_DESKTOP_FOCUS_MODE_MOUSE)
++      gtk_check_button_set_active (self->secondary_click_radio, TRUE);
++  else
++    {
++      gtk_check_button_set_active (self->click_to_focus_radio, FALSE);
++      gtk_check_button_set_active (self->focus_on_hover_radio, FALSE);
++      gtk_check_button_set_active (self->secondary_click_radio, FALSE);
++    }
++}
++
++static void
++set_focus_mode (CcWindowsPanel   *self,
++                GDesktopFocusMode focus)
++{
++  GDesktopFocusMode focus_mode;
++
++  focus_mode = g_settings_get_enum (self->wm_settings,
++                                WM_FOCUS_MODE);
++
++  if (focus == focus_mode)
++    return;
++
++  g_settings_set_enum (self->wm_settings,
++                       WM_FOCUS_MODE,
++                       focus);
++}
++
++static void
++on_focus_mode_checkbutton_active_cb (CcWindowsPanel *self)
++{
++  if (gtk_check_button_get_active (self->click_to_focus_radio))
++    set_focus_mode (self, G_DESKTOP_FOCUS_MODE_CLICK);
++  else if (gtk_check_button_get_active (self->focus_on_hover_radio))
++    set_focus_mode (self, G_DESKTOP_FOCUS_MODE_SLOPPY);
++  else if (gtk_check_button_get_active (self->secondary_click_radio))
++    set_focus_mode (self, G_DESKTOP_FOCUS_MODE_MOUSE);
++}
++
++static void
++cc_windows_panel_class_init (CcWindowsPanelClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->finalize = cc_windows_panel_finalize;
++
++  gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/control-center/windows/cc-windows-panel.ui");
++
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, left_placement);
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, right_placement);
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, minimize_switch);
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, maximize_switch);
++
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, attach_modal_dialogs_switch);
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, center_new_windows_switch);
++
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, click_to_focus_radio);
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, focus_on_hover_radio);
++  gtk_widget_class_bind_template_child (widget_class, CcWindowsPanel, secondary_click_radio);
++
++  gtk_widget_class_bind_template_callback (widget_class, on_titlebar_placement_checkbutton_active_cb);
++  gtk_widget_class_bind_template_callback (widget_class, on_option_click_released_cb);
++  gtk_widget_class_bind_template_callback (widget_class, on_focus_mode_checkbutton_active_cb);
++}
++
++static void
++cc_windows_panel_init (CcWindowsPanel *self)
++{
++  g_resources_register (cc_windows_get_resource ());
++
++  gtk_widget_init_template (GTK_WIDGET (self));
++
++  self->mutter_settings = g_settings_new ("org.gnome.mutter");
++
++  g_settings_bind (self->mutter_settings, "attach-modal-dialogs",
++                   self->attach_modal_dialogs_switch, "active",
++                   G_SETTINGS_BIND_DEFAULT);
++
++  g_settings_bind (self->mutter_settings, "center-new-windows",
++                   self->center_new_windows_switch, "active",
++                   G_SETTINGS_BIND_DEFAULT);
++
++  self->wm_settings = g_settings_new ("org.gnome.desktop.wm.preferences");
++
++  reload_titlebar_layout (self);
++
++  g_signal_connect_object (self->wm_settings,
++                           "changed::" WM_BUTTON_LAYOUT,
++                           G_CALLBACK (reload_titlebar_layout),
++                           self,
++                           G_CONNECT_SWAPPED);
++
++  reload_focus_toggles (self);
++
++  g_signal_connect_object (self->wm_settings,
++                           "changed::" WM_FOCUS_MODE,
++                           G_CALLBACK (reload_focus_toggles),
++                           self,
++                           G_CONNECT_SWAPPED);
++}
++
++void
++cc_windows_panel_static_init_func (void)
++{
++  CcApplication *application;
++  const gchar *desktop_list;
++  g_auto(GStrv) desktops = NULL;
++
++  desktop_list = g_getenv ("XDG_CURRENT_DESKTOP");
++  if (desktop_list != NULL)
++    desktops = g_strsplit (desktop_list, ":", -1);
++
++  if (desktops == NULL || !g_strv_contains ((const gchar * const *) desktops, "zarya")) {
++    application = CC_APPLICATION (g_application_get_default ());
++    cc_shell_model_set_panel_visibility (cc_application_get_model (application),
++                                         "windows",
++                                         CC_PANEL_HIDDEN);
++  }
++}
+\ No newline at end of file
+--- /dev/null
++++ b/panels/windows/cc-windows-panel.h
+@@ -0,0 +1,35 @@
++/* cc-windows-panel.h
++ *
++ * Copyright 2022 Muqtadir <muqtxdir@gmail.com>
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef _CC_WINDOWS_PANEL_H_
++#define _CC_WINDOWS_PANEL_H_
++
++#include <gio/gio.h>
++#include <shell/cc-panel.h>
++
++G_BEGIN_DECLS
++
++#define CC_TYPE_WINDOWS_PANEL (cc_windows_panel_get_type())
++G_DECLARE_FINAL_TYPE (CcWindowsPanel, cc_windows_panel, CC, WINDOWS_PANEL, CcPanel)
++
++void cc_windows_panel_static_init_func (void);
++
++G_END_DECLS
++#endif /* _CC_EDIT_DIALOG_H_ */
+\ No newline at end of file
+--- /dev/null
++++ b/panels/windows/cc-windows-panel.ui
+@@ -0,0 +1,195 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <template class="CcWindowsPanel" parent="CcPanel">
++    <child type="content">
++      <object class="AdwPreferencesPage">
++        <child>
++          <object class="AdwPreferencesGroup">
++            <property name="title" translatable="yes">Layout</property>
++            <child>
++              <object class="CcVerticalRow">
++                <child type="content">
++                  <object class="GtkBox">
++                    <property name="hexpand">True</property>
++                    <property name="homogeneous">True</property>
++                    <property name="spacing">24</property>
++                    <property name="margin-top">12</property>
++                    <property name="margin-bottom">12</property>
++                    <child>
++                      <object class="GtkBox">
++                        <property name="spacing">12</property>
++                        <property name="orientation">vertical</property>
++                        <child>
++                          <object class="GtkGestureClick">
++                            <signal name="released" handler="on_option_click_released_cb" object="left_placement" swapped="no" />
++                          </object>
++                        </child>
++                        <child>
++                          <object class="AdwBin">
++                            <style>
++                              <class name="background"/>
++                              <class name="frame"/>
++                            </style>
++                            <child>
++                              <object class="GtkPicture">
++                                <property name="hexpand">True</property>
++                                <property name="halign">center</property>
++                                <property name="margin-top">18</property>
++                                <property name="margin-bottom">18</property>
++                                <property name="margin-start">18</property>
++                                <property name="margin-end">18</property>
++                                <property name="height-request">128</property>
++                                <property name="file">resource:///org/gnome/control-center/windows/assets/left.svg</property>
++                              </object>
++                            </child>
++                          </object>
++                        </child>
++                        <child>
++                          <object class="GtkCheckButton" id="left_placement">
++                            <property name="margin-start">6</property>
++                            <property name="label" translatable="yes">Left</property>
++                            <signal name="notify::active" handler="on_titlebar_placement_checkbutton_active_cb" swapped="true"/>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++                    <child>
++                      <object class="GtkBox">
++                        <property name="spacing">12</property>
++                        <property name="orientation">vertical</property>
++                        <child>
++                          <object class="GtkGestureClick">
++                            <signal name="released" handler="on_option_click_released_cb" object="right_placement" swapped="no" />
++                          </object>
++                        </child>
++                        <child>
++                          <object class="AdwBin">
++                            <style>
++                              <class name="background"/>
++                              <class name="frame"/>
++                            </style>
++                            <child>
++                              <object class="GtkPicture">
++                                <property name="hexpand">True</property>
++                                <property name="halign">center</property>
++                                <property name="margin-top">18</property>
++                                <property name="margin-bottom">18</property>
++                                <property name="margin-start">18</property>
++                                <property name="margin-end">18</property>
++                                <property name="height-request">128</property>
++                                <property name="file">resource:///org/gnome/control-center/windows/assets/right.svg</property>
++                              </object>
++                            </child>
++                          </object>
++                        </child>
++                        <child>
++                          <object class="GtkCheckButton" id="right_placement">
++                            <property name="margin-start">6</property>
++                            <property name="group">left_placement</property>
++                            <property name="label" translatable="yes">Right</property>
++                            <signal name="notify::active" handler="on_titlebar_placement_checkbutton_active_cb" swapped="true"/>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++                  </object>
++                </child>
++              </object>
++            </child>
++            <child>
++              <object class="AdwActionRow">
++                <property name="title" translatable="yes">Minimize</property>
++                <property name="activatable-widget">minimize_switch</property>
++                <child>
++                  <object class="GtkSwitch" id="minimize_switch">
++                    <signal name="notify::active" handler="on_titlebar_placement_checkbutton_active_cb" swapped="true"/>
++                    <property name="valign">center</property>
++                  </object>
++                </child>
++              </object>
++            </child>
++            <child>
++              <object class="AdwActionRow">
++                <property name="title" translatable="yes">Maximize</property>
++                <property name="activatable-widget">maximize_switch</property>
++                <child>
++                  <object class="GtkSwitch" id="maximize_switch">
++                    <signal name="notify::active" handler="on_titlebar_placement_checkbutton_active_cb" swapped="true"/>
++                    <property name="valign">center</property>
++                  </object>
++                </child>
++              </object>
++            </child>
++          </object>
++        </child>
++        
++        <child>
++          <object class="AdwPreferencesGroup">
++            <property name="title" translatable="yes">Behavior</property>
++            <child>
++              <object class="CcListRow" id="attach_modal_dialogs_switch">
++                <property name="title" translatable="yes">Attach Modal Dialogs</property>
++                <property name="use-underline">True</property>
++                <property name="show-switch">True</property>
++              </object>
++            </child>
++            <child>
++              <object class="CcListRow" id="center_new_windows_switch">
++                <property name="title" translatable="yes">Center New Windows</property>
++                <property name="use-underline">True</property>
++                <property name="show-switch">True</property>
++              </object>
++            </child>
++          </object>
++        </child>
++
++        <child>
++          <object class="AdwPreferencesGroup">
++            <property name="title" translatable="yes">Focus</property>
++            <child>
++              <object class="AdwActionRow">
++                <property name="title" translatable="yes">Click to Focus</property>
++                <property name="subtitle" translatable="yes">Windows are focused when they are clicked.</property>
++                <property name="activatable-widget">click_to_focus_radio</property>
++                <child type="prefix">
++                  <object class="GtkCheckButton" id="click_to_focus_radio">
++                    <signal name="notify::active" handler="on_focus_mode_checkbutton_active_cb" swapped="true"/>
++                    <property name="valign">center</property>
++                  </object>
++                </child>
++              </object>
++            </child>
++            <child>
++              <object class="AdwActionRow">
++                <property name="title" translatable="yes">Focus on Hover</property>
++                <property name="subtitle" translatable="yes">Windows is focused when hovered with pointer. Windows remain focused when the desktop is hovered.</property>
++                <property name="activatable-widget">focus_on_hover_radio</property>
++                <child type="prefix">
++                  <object class="GtkCheckButton" id="focus_on_hover_radio">
++                    <signal name="notify::active" handler="on_focus_mode_checkbutton_active_cb" swapped="true"/>
++                    <property name="valign">center</property>
++                    <property name="group">click_to_focus_radio</property>
++                  </object>
++                </child>
++              </object>
++            </child>
++            <child>
++              <object class="AdwActionRow">
++                <property name="title" translatable="yes">Secondary Click</property>
++                <property name="subtitle" translatable="yes">Windows is focused when hovered with pointer. Hovering the desktop removes focus from the previous window.</property>
++                <property name="activatable-widget">secondary_click_radio</property>
++                <child type="prefix">
++                  <object class="GtkCheckButton" id="secondary_click_radio">
++                    <signal name="notify::active" handler="on_focus_mode_checkbutton_active_cb" swapped="true"/>
++                    <property name="valign">center</property>
++                    <property name="group">focus_on_hover_radio</property>
++                  </object>
++                </child>
++              </object>
++            </child>
++          </object>
++        </child>
++      </object>
++    </child>
++  </template>
++</interface>
+--- /dev/null
++++ b/panels/windows/icons/meson.build
+@@ -0,0 +1,4 @@
++install_data(
++  'scalable/org.gnome.Settings-windows-symbolic.svg',
++  install_dir: join_paths(control_center_icondir, 'hicolor', 'scalable', 'apps')
++)
+--- /dev/null
++++ b/panels/windows/icons/scalable/org.gnome.Settings-windows-symbolic.svg
+@@ -0,0 +1 @@
++<svg width="16" height="16" xmlns="http://www.w3.org/2000/svg"><path style="stroke:none;fill-rule:nonzero;fill:#2e3436;fill-opacity:1" d="M3 1c-1.09 0-2 .91-2 2v10c0 1.09.91 2 2 2h10c1.09 0 2-.91 2-2V3c0-1.09-.91-2-2-2H3zm0 4h10v8H3V5z"/></svg>
+--- /dev/null
++++ b/panels/windows/meson.build
+@@ -0,0 +1,39 @@
++panels_list += cappletname
++desktop = 'gnome-@0@-panel.desktop'.format(cappletname)
++
++i18n.merge_file(
++  type: 'desktop',
++  input: desktop + '.in',
++  output: desktop,
++  po_dir: po_dir,
++  install: true,
++  install_dir: control_center_desktopdir
++)
++
++sources = files(
++  'cc-windows-panel.c',
++)
++
++resource_data = files(
++  'cc-windows-panel.ui',
++)
++
++sources += gnome.compile_resources(
++  'cc-' + cappletname + '-resources',
++  cappletname + '.gresource.xml',
++  c_name: 'cc_' + cappletname,
++  dependencies: resource_data,
++  export: true
++)
++
++cflags += '-DGNOMELOCALEDIR="@0@"'.format(control_center_localedir)
++
++panels_libs += static_library(
++  cappletname,
++  sources: sources,
++  include_directories: [ top_inc, common_inc ],
++  dependencies: common_deps,
++  c_args: cflags
++)
++
++subdir('icons')
+--- /dev/null
++++ b/panels/windows/windows.gresource.xml
+@@ -0,0 +1,10 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<gresources>
++  <gresource prefix="/org/gnome/control-center/windows">
++    <file preprocess="xml-stripblanks">cc-windows-panel.ui</file>
++
++    <!-- Assets -->
++    <file>assets/left.svg</file>
++    <file>assets/right.svg</file>
++  </gresource>
++</gresources>
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -395,6 +395,7 @@
+   "notifications",
+   "search",
+   "multitasking",
++  "windows",
+   "applications",
+   "privacy",
+   "online-accounts",
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -44,6 +44,7 @@
+ extern GType cc_keyboard_panel_get_type (void);
+ extern GType cc_mouse_panel_get_type (void);
+ extern GType cc_multitasking_panel_get_type (void);
++extern GType cc_windows_panel_get_type (void);
+ #ifdef BUILD_NETWORK
+ extern GType cc_network_panel_get_type (void);
+ extern GType cc_wifi_panel_get_type (void);
+@@ -75,6 +76,7 @@
+ extern GType cc_usage_panel_get_type (void);
+ extern GType cc_screen_panel_get_type (void);
+ extern GType cc_diagnostics_panel_get_type (void);
++extern GType cc_windows_panel_static_init_func (void);
+ 
+ /* Static init functions */
+ extern void cc_diagnostics_panel_static_init_func (void);
+@@ -143,6 +145,7 @@
+ #ifdef BUILD_WACOM
+   PANEL_TYPE("wacom",            cc_wacom_panel_get_type,                cc_wacom_panel_static_init_func),
+ #endif
++  PANEL_TYPE("windows",          cc_windows_panel_get_type,              cc_windows_panel_static_init_func),
+ #ifdef BUILD_WWAN
+   PANEL_TYPE("wwan",             cc_wwan_panel_get_type,                 cc_wwan_panel_static_init_func),
+ #endif
+--- /dev/null
++++ b/panels/windows/gnome-windows-panel.desktop.in
+@@ -0,0 +1,14 @@
++[Desktop Entry]
++Name=Windows
++Comment=Manage preferences for windows and windows titlebar
++Exec=gnome-control-center windows
++# Translators: Do NOT translate or transliterate this text (this is an icon file name)!
++Icon=org.gnome.Settings-windows-symbolic
++Terminal=false
++Type=Application
++NoDisplay=true
++StartupNotify=true
++Categories=GNOME;GTK;Settings;DesktopSettings;X-GNOME-Settings-Panel;X-GNOME-PersonalizationSettings;
++OnlyShowIn=GNOME;
++# Translators: Search terms to find the Search panel. Do NOT translate or localize the semicolons! The list MUST also end with a semicolon!
++Keywords=Windows;Titlebar;Focus Mode;Center New Windows;Layout;Modal dialogs;

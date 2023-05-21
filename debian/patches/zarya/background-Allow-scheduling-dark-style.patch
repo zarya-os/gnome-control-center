@@ -1,0 +1,455 @@
+--- a/panels/background/cc-background-panel.c
++++ b/panels/background/cc-background-panel.c
+@@ -35,6 +35,10 @@
+ #include "cc-background-resources.h"
+ #include "cc-background-xml.h"
+ 
++#include "cc-background-resources.h"
++#include "shell/cc-application.h"
++#include "shell/cc-object-storage.h"
++
+ #define WP_PATH_ID "org.gnome.desktop.background"
+ #define WP_LOCK_PATH_ID "org.gnome.desktop.screensaver"
+ #define WP_URI_KEY "picture-uri"
+@@ -47,6 +51,15 @@
+ #define INTERFACE_PATH_ID "org.gnome.desktop.interface"
+ #define INTERFACE_COLOR_SCHEME_KEY "color-scheme"
+ 
++#define SCHEDULE_SCHEMA "org.gnome.shell.extensions.nightthemeswitcher"
++#define SCHEDULE_UUID "nightthemeswitcher@romainvigier.fr"
++
++#define GNOME_SHELL_SCHEMA "org.gnome.shell"
++#define GNOME_SHELL_ENABLED_EXTENSIONS "enabled-extensions"
++#define GNOME_SHELL_DISABLED_EXTENSIONS "disabled-extensions"
++
++#define SHELL_EXTENSION_STATE_UNINSTALLED 99
++
+ struct _CcBackgroundPanel
+ {
+   CcPanel parent_instance;
+@@ -66,6 +79,13 @@
+   CcBackgroundPreview *dark_preview;
+   GtkToggleButton *default_toggle;
+   GtkToggleButton *dark_toggle;
++
++  GtkSwitch       *schedule_switch;
++  AdwActionRow    *schedule_row;
++
++  GSettings       *schedule_settings;
++  GSettings       *gnome_shell_settings;
++  GDBusProxy      *shell_extensions_proxy;
+ };
+ 
+ CC_PANEL_REGISTER (CcBackgroundPanel, cc_background_panel)
+@@ -355,10 +375,258 @@
+   g_clear_object (&panel->lock_settings);
+   g_clear_object (&panel->interface_settings);
+   g_clear_object (&panel->proxy);
++  g_clear_object (&panel->gnome_shell_settings);
++  g_clear_object (&panel->schedule_settings);
++  g_clear_object (&panel->shell_extensions_proxy);
+ 
+   G_OBJECT_CLASS (cc_background_panel_parent_class)->dispose (object);
+ }
+ 
++static gboolean
++update_panel_visibilty (CcBackgroundPanel *self)
++{
++  gboolean enabled = FALSE;
++
++  enabled |= gtk_widget_is_visible (GTK_WIDGET (self->schedule_row));
++  return enabled;
++}
++
++static void
++update_extension_widgets (GtkWidget  *extension_row,
++                          GtkWidget  *extension_switch,
++                          const char *uuid,
++                          int         extension_state,
++                          gboolean    always_show_switch)
++{
++  enum {
++    STATE_ENABLED = 1,
++    STATE_DISABLED,
++    STATE_ERROR,
++    STATE_OUT_OF_DATE,
++    STATE_DOWNLOADING,
++    STATE_INITIALIZED,
++    STATE_DISABLING,
++    STATE_ENABLING,
++
++    STATE_UNINSTALLED = SHELL_EXTENSION_STATE_UNINSTALLED,
++  };
++
++  switch (extension_state)
++    {
++      case STATE_ENABLED:
++      case STATE_ENABLING:
++      case STATE_DOWNLOADING:
++        g_debug ("Extension %s is enabled (state %d)", uuid, extension_state);
++        gtk_widget_set_visible (extension_switch, always_show_switch);
++        break;
++      case STATE_INITIALIZED:
++      case STATE_DISABLED:
++      case STATE_DISABLING:
++        g_warning ("Extension %s is not enabled (state %d)", uuid, extension_state);
++        gtk_widget_set_visible (extension_switch, TRUE);
++        break;
++      case STATE_OUT_OF_DATE:
++      case STATE_UNINSTALLED:
++      case STATE_ERROR:
++        g_warning ("Extension %s is not available or invalid (state %d)", uuid, extension_state);
++        gtk_widget_set_visible (extension_row, FALSE);
++        break;
++      default:
++        g_warning ("Unknown extension state for %s: %d\n", uuid, extension_state);
++    }
++}
++
++static void
++on_extensions_listed (GObject *source_object,
++                      GAsyncResult *res,
++                      gpointer user_data)
++{
++  CcBackgroundPanel *self = user_data;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GVariant) response = NULL;
++  g_autoptr (GVariant) extensions = NULL;
++  GVariantIter iter;
++  GVariant *value;
++  const char *uuid;
++
++  response = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, &error);
++
++  if (error)
++    {
++      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        g_warning ("Failed to get gnome-shell extensions: %s", error->message);
++      return;
++    }
++
++  extensions = g_variant_get_child_value (response, 0);
++
++  double schedule_state = SHELL_EXTENSION_STATE_UNINSTALLED;
++
++  g_variant_iter_init (&iter, extensions);
++  while (g_variant_iter_loop (&iter, "{&s@a{sv}}", &uuid, &value))
++    {
++      g_autoptr (GVariantDict) info = NULL;
++
++      if (g_str_equal (uuid, SCHEDULE_UUID))
++        {
++          info = g_variant_dict_new (value);
++          g_variant_dict_lookup (info, "state", "d", &schedule_state);
++        }
++    }
++
++  update_extension_widgets (GTK_WIDGET (self->schedule_row),
++                            GTK_WIDGET (self->schedule_switch),
++                            SCHEDULE_UUID, schedule_state, TRUE);
++
++  update_panel_visibilty (self);
++}
++
++static void
++shell_extensions_update_visibilty (CcBackgroundPanel *self)
++{
++  g_dbus_proxy_call (self->shell_extensions_proxy,
++                     "ListExtensions",
++                     NULL, G_DBUS_CALL_FLAGS_NONE,
++                     -1, cc_panel_get_cancellable (CC_PANEL (self)),
++                     (GAsyncReadyCallback) on_extensions_listed, self);
++}
++
++static void
++shell_extensions_proxy_ready (GObject        *source,
++                              GAsyncResult   *res,
++                              CcBackgroundPanel *self)
++{
++  GDBusProxy *proxy;
++  g_autoptr(GError) error = NULL;
++
++  proxy = cc_object_storage_create_dbus_proxy_finish (res, &error);
++  if (!proxy)
++    {
++      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        g_warning ("Failed to contact gnome-shell extensions: %s", error->message);
++      return;
++    }
++
++  self->shell_extensions_proxy = g_steal_pointer (&proxy);
++  shell_extensions_update_visibilty (self);
++}
++
++static gboolean
++is_extension_disabled (CcBackgroundPanel *self,
++                       const char    *uuid)
++{
++  g_auto(GStrv) disabled_extensions = NULL;
++
++  disabled_extensions = g_settings_get_strv (self->gnome_shell_settings,
++                                             GNOME_SHELL_DISABLED_EXTENSIONS);
++
++  return g_strv_contains ((const gchar **) disabled_extensions, uuid);
++}
++
++static void
++set_extension_enabled (CcBackgroundPanel *self,
++                       const char    *uuid,
++                       gboolean       enabled)
++{
++  g_auto(GStrv) disabled_extensions = NULL;
++  g_auto(GStrv) enabled_extensions = NULL;
++  g_autoptr(GPtrArray) enabled_extensions_list = NULL;
++  g_autoptr(GPtrArray) disabled_extensions_list = NULL;
++  guint idx;
++
++  g_settings_delay (self->gnome_shell_settings);
++
++  enabled_extensions = g_settings_get_strv (self->gnome_shell_settings,
++                                            GNOME_SHELL_ENABLED_EXTENSIONS);
++
++  disabled_extensions = g_settings_get_strv (self->gnome_shell_settings,
++                                            GNOME_SHELL_DISABLED_EXTENSIONS);
++
++  enabled_extensions_list = g_ptr_array_new_take_null_terminated ((gpointer *) g_steal_pointer (&enabled_extensions), g_free);
++  disabled_extensions_list = g_ptr_array_new_take_null_terminated ((gpointer *) g_steal_pointer (&disabled_extensions), g_free);
++
++  if (enabled)
++    {
++      if (!g_ptr_array_find_with_equal_func (enabled_extensions_list, uuid,
++                                             g_str_equal, &idx))
++        {
++          g_ptr_array_add (enabled_extensions_list, g_strdup (uuid));
++
++          g_settings_set_strv (self->gnome_shell_settings,
++                               GNOME_SHELL_ENABLED_EXTENSIONS,
++                               (const char **) enabled_extensions_list->pdata);
++        }
++
++      if (g_ptr_array_find_with_equal_func (disabled_extensions_list, uuid,
++                                            g_str_equal, &idx))
++        {
++          g_ptr_array_remove_index (disabled_extensions_list, idx);
++
++          g_settings_set_strv (self->gnome_shell_settings,
++                               GNOME_SHELL_DISABLED_EXTENSIONS,
++                               (const char **) disabled_extensions_list->pdata);
++        }
++    }
++  else
++    {
++      if (g_ptr_array_find_with_equal_func (enabled_extensions_list, uuid,
++                                            g_str_equal, &idx))
++        {
++          g_ptr_array_remove_index (enabled_extensions_list, idx);
++
++          g_settings_set_strv (self->gnome_shell_settings,
++                               GNOME_SHELL_ENABLED_EXTENSIONS,
++                               (const char **) enabled_extensions_list->pdata);
++        }
++
++      if (!g_ptr_array_find_with_equal_func (disabled_extensions_list, uuid,
++                                             g_str_equal, &idx))
++        {
++          g_ptr_array_add (disabled_extensions_list, g_strdup (uuid));
++
++          g_settings_set_strv (self->gnome_shell_settings,
++                               GNOME_SHELL_DISABLED_EXTENSIONS,
++                               (const char **) disabled_extensions_list->pdata);
++        }
++    }
++
++  g_settings_apply (self->gnome_shell_settings);
++}
++
++static void
++update_schedule_status (CcBackgroundPanel *self)
++{
++  gboolean extension_enabled = TRUE;
++
++  if (is_extension_disabled (self, SCHEDULE_UUID))
++    extension_enabled = FALSE;
++
++  gtk_switch_set_active (self->schedule_switch, extension_enabled);
++}
++
++static void
++on_schedule_switch_changed (CcBackgroundPanel *self)
++{
++  set_extension_enabled (self, SCHEDULE_UUID,
++                         gtk_switch_get_active (self->schedule_switch));
++}
++
++static gboolean
++open_schedule_settings (CcBackgroundPanel *self)
++{
++  const gchar *argv = "gnome-extensions prefs nightthemeswitcher@romainvigier.fr";
++  g_spawn_command_line_async (argv, NULL);
++
++  return TRUE;
++}
++
++static void
++on_schedule_settings_clicked (CcBackgroundPanel *self)
++{
++  set_extension_enabled (self, SCHEDULE_UUID,
++                         gtk_switch_get_active (self->schedule_switch));
++}
++
+ static void
+ cc_background_panel_finalize (GObject *object)
+ {
+@@ -391,10 +659,14 @@
+   gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, dark_preview);
+   gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, default_toggle);
+   gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, dark_toggle);
++  gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, schedule_switch);
++  gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, schedule_row);
+ 
+   gtk_widget_class_bind_template_callback (widget_class, on_color_scheme_toggle_active_cb);
+   gtk_widget_class_bind_template_callback (widget_class, on_chooser_background_chosen_cb);
+   gtk_widget_class_bind_template_callback (widget_class, on_add_picture_button_clicked_cb);
++  gtk_widget_class_bind_template_callback (widget_class, on_schedule_switch_changed);
++  gtk_widget_class_bind_template_callback (widget_class, open_schedule_settings);
+ }
+ 
+ static void
+@@ -406,11 +678,23 @@
+ 
+ static void
+ cc_background_panel_init (CcBackgroundPanel *panel)
+-{
++{  
++  GSettingsSchemaSource *schema_source = g_settings_schema_source_get_default ();
++  g_autoptr(GSettingsSchema) schema = NULL;
++
+   g_resources_register (cc_background_get_resource ());
+ 
+   gtk_widget_init_template (GTK_WIDGET (panel));
+ 
++  const gchar *desktop_list = g_getenv ("XDG_CURRENT_DESKTOP");
++  g_auto(GStrv) desktops = NULL;
++  if (desktop_list)
++    desktops = g_strsplit (desktop_list, ":", 0);
++  if (desktops && g_strv_contains ((const gchar * const *) desktops, "zarya"))
++    gtk_widget_set_visible (GTK_WIDGET (panel->schedule_row), TRUE);
++  else
++    gtk_widget_set_visible (GTK_WIDGET (panel->schedule_row), FALSE);
++
+   panel->connection = g_application_get_dbus_connection (g_application_get_default ());
+ 
+   panel->settings = g_settings_new (WP_PATH_ID);
+@@ -446,6 +730,57 @@
+                             NULL,
+                             got_transition_proxy_cb,
+                             panel);
++  schema = g_settings_schema_source_lookup (schema_source, GNOME_SHELL_SCHEMA, TRUE);
++  if (schema)
++    {
++      panel->gnome_shell_settings = g_settings_new_full (schema, NULL, NULL);
++    }
++  else
++    {
++      g_warning ("No GNOME Shell is installed here. Please fix your installation.");
++    }
++
++  schema = g_settings_schema_source_lookup (schema_source, SCHEDULE_SCHEMA, TRUE);
++  if(schema && panel->gnome_shell_settings)
++  {
++    panel->schedule_settings = g_settings_new_full (schema, NULL, NULL);
++
++    g_signal_connect_object (panel->gnome_shell_settings,
++                             "changed::" GNOME_SHELL_ENABLED_EXTENSIONS,
++                              G_CALLBACK (update_schedule_status),
++                              panel,
++                              G_CONNECT_SWAPPED);
++
++    g_signal_connect_object (panel->gnome_shell_settings,
++                             "changed::" GNOME_SHELL_DISABLED_EXTENSIONS,
++                             G_CALLBACK (update_schedule_status),
++                             panel,
++                             G_CONNECT_SWAPPED);
++
++  update_schedule_status (panel);
++
++  g_clear_pointer (&schema, g_settings_schema_unref);
++  }
++  else
++    {
++      g_debug ("No Schedule is installed here. Panel disabled.");
++      gtk_widget_set_visible (GTK_WIDGET (panel->schedule_row), FALSE);
++    }
+ 
+   load_custom_css (panel);
++
++  if (!update_panel_visibilty (panel))
++    return;
++
++  cc_object_storage_create_dbus_proxy (G_BUS_TYPE_SESSION,
++                                       G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES |
++                                       G_DBUS_PROXY_FLAGS_DO_NOT_CONNECT_SIGNALS,
++                                       "org.gnome.Shell.Extensions",
++                                       "/org/gnome/Shell/Extensions",
++                                       "org.gnome.Shell.Extensions",
++                                       cc_panel_get_cancellable (CC_PANEL (panel)),
++                                       (GAsyncReadyCallback) shell_extensions_proxy_ready,
++                                       panel);
++
++  g_resources_register (cc_background_get_resource ());
+ }
+--- a/panels/background/cc-background-panel.ui
++++ b/panels/background/cc-background-panel.ui
+@@ -90,6 +90,41 @@
+               </object>
+             </child>
+ 
++            <child>
++              <object class="AdwActionRow" id="schedule_row">
++                <property name="title">Schedule</property>
++                <property name="activatable_widget">schedule_switch</property>
++                <child>
++                  <object class="GtkSwitch" id="schedule_switch">
++                    <property name="valign">center</property>
++                    <property name="halign">center</property>
++                    <signal name="notify::active" handler="on_schedule_switch_changed" swapped="yes"/>
++                  </object>
++                </child>
++                <child type="suffix">
++                  <object class="GtkSeparator">
++                    <property name="orientation">vertical</property>
++                    <property name="margin-top">12</property>
++                    <property name="margin-bottom">12</property>
++                  </object>
++                </child>
++                <child type="suffix">
++                  <object class="GtkButton">
++                    <property name="icon-name">org.gnome.Settings-symbolic</property>
++                    <property name="tooltip-text" translatable="yes">Configure</property>
++                    <property name="sensitive" bind-source="schedule_switch" bind-property="active" bind-flags="default|sync-create" />
++                    <signal name="clicked" handler="open_schedule_settings" swapped="yes"/>
++                    <property name="valign">center</property>
++                    <property name="halign">center</property>
++                    <style>
++                      <class name="circular" />
++                      <class name="flat" />
++                    </style>
++                  </object>
++                </child>
++              </object>
++            </child>
++            
+           </object>
+         </child>
+ 
+--- a/panels/background/cc-background-panel.h
++++ b/panels/background/cc-background-panel.h
+@@ -19,7 +19,7 @@
+  */
+ 
+ #pragma once
+-
++#include <gio/gio.h>
+ #include <shell/cc-panel.h>
+ 
+ G_BEGIN_DECLS
