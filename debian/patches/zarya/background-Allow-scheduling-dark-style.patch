@@ -16,7 +16,7 @@
  #define INTERFACE_COLOR_SCHEME_KEY "color-scheme"
  
 +#define SCHEDULE_SCHEMA "org.gnome.shell.extensions.nightthemeswitcher"
-+#define SCHEDULE_UUID "nightthemeswitcher@romainvigier.fr"
++#define SCHEDULE_UUID "schedule@zarya.com"
 +
 +#define GNOME_SHELL_SCHEMA "org.gnome.shell"
 +#define GNOME_SHELL_ENABLED_EXTENSIONS "enabled-extensions"

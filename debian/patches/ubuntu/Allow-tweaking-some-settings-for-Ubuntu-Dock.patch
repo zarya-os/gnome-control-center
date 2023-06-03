@@ -59,7 +59,7 @@ Forwarded: not-needed
    'user-accounts',
 --- /dev/null
 +++ b/panels/ubuntu/cc-ubuntu-panel.c
-@@ -0,0 +1,994 @@
+@@ -0,0 +1,993 @@
 +/* -*- mode: C; c-file-style: "gnu"; indent-tabs-mode: nil; -*- */
 +/*
 + * Copyright (C) 2017-2022 Canonical Ltd
@@ -99,7 +99,6 @@ Forwarded: not-needed
 +#define DEFAULT_ICONSIZE 48.0
 +#define ICONSIZE_KEY "dash-max-icon-size"
 +
-+#define UBUNTU_DOCK_UUID "ubuntu-dock@ubuntu.com"
 +#define UBUNTU_DOCK_SCHEMA "org.gnome.shell.extensions.dash-to-dock"
 +#define UBUNTU_DOCK_ALL_MONITORS_KEY "multi-monitor"
 +#define UBUNTU_DOCK_PREFERRED_MONITOR_KEY "preferred-monitor"
