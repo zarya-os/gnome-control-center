@@ -41,7 +41,7 @@
  };
  
  CC_PANEL_REGISTER (CcBackgroundPanel, cc_background_panel)
-@@ -355,10 +375,258 @@
+@@ -355,10 +375,249 @@
    g_clear_object (&panel->lock_settings);
    g_clear_object (&panel->interface_settings);
    g_clear_object (&panel->proxy);
@@ -92,7 +92,7 @@
 +      case STATE_INITIALIZED:
 +      case STATE_DISABLED:
 +      case STATE_DISABLING:
-+        g_warning ("Extension %s is not enabled (state %d)", uuid, extension_state);
++        g_debug ("Extension %s is not enabled (state %d)", uuid, extension_state);
 +        gtk_widget_set_visible (extension_switch, TRUE);
 +        break;
 +      case STATE_OUT_OF_DATE:
@@ -281,26 +281,17 @@
 +                         gtk_switch_get_active (self->schedule_switch));
 +}
 +
-+static gboolean
-+open_schedule_settings (CcBackgroundPanel *self)
-+{
-+  const gchar *argv = "gnome-extensions prefs nightthemeswitcher@romainvigier.fr";
-+  g_spawn_command_line_async (argv, NULL);
-+
-+  return TRUE;
-+}
-+
 +static void
 +on_schedule_settings_clicked (CcBackgroundPanel *self)
 +{
-+  set_extension_enabled (self, SCHEDULE_UUID,
-+                         gtk_switch_get_active (self->schedule_switch));
++  const gchar *argv[] = {"gnome-extensions", "prefs", SCHEDULE_UUID, NULL};
++  g_spawn_async (NULL, (char **)argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, NULL);
 +}
 +
  static void
  cc_background_panel_finalize (GObject *object)
  {
-@@ -391,10 +659,14 @@
+@@ -391,10 +650,14 @@
    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, dark_preview);
    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, default_toggle);
    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, dark_toggle);
@@ -311,11 +302,11 @@
    gtk_widget_class_bind_template_callback (widget_class, on_chooser_background_chosen_cb);
    gtk_widget_class_bind_template_callback (widget_class, on_add_picture_button_clicked_cb);
 +  gtk_widget_class_bind_template_callback (widget_class, on_schedule_switch_changed);
-+  gtk_widget_class_bind_template_callback (widget_class, open_schedule_settings);
++  gtk_widget_class_bind_template_callback (widget_class, on_schedule_settings_clicked);
  }
  
  static void
-@@ -406,11 +678,23 @@
+@@ -406,11 +669,23 @@
  
  static void
  cc_background_panel_init (CcBackgroundPanel *panel)
@@ -340,7 +331,7 @@
    panel->connection = g_application_get_dbus_connection (g_application_get_default ());
  
    panel->settings = g_settings_new (WP_PATH_ID);
-@@ -446,6 +730,57 @@
+@@ -446,6 +721,57 @@
                              NULL,
                              got_transition_proxy_cb,
                              panel);
@@ -400,14 +391,13 @@
  }
 --- a/panels/background/cc-background-panel.ui
 +++ b/panels/background/cc-background-panel.ui
-@@ -90,6 +90,41 @@
+@@ -90,6 +90,39 @@
                </object>
              </child>
  
 +            <child>
 +              <object class="AdwActionRow" id="schedule_row">
 +                <property name="title">Schedule</property>
-+                <property name="activatable_widget">schedule_switch</property>
 +                <child>
 +                  <object class="GtkSwitch" id="schedule_switch">
 +                    <property name="valign">center</property>
@@ -427,11 +417,10 @@
 +                    <property name="icon-name">org.gnome.Settings-symbolic</property>
 +                    <property name="tooltip-text" translatable="yes">Configure</property>
 +                    <property name="sensitive" bind-source="schedule_switch" bind-property="active" bind-flags="default|sync-create" />
-+                    <signal name="clicked" handler="open_schedule_settings" swapped="yes"/>
++                    <signal name="clicked" handler="on_schedule_settings_clicked" swapped="yes"/>
 +                    <property name="valign">center</property>
 +                    <property name="halign">center</property>
 +                    <style>
-+                      <class name="circular" />
 +                      <class name="flat" />
 +                    </style>
 +                  </object>

@@ -1,0 +1,1029 @@
+--- a/panels/multitasking/cc-multitasking-panel.c
++++ b/panels/multitasking/cc-multitasking-panel.c
+@@ -24,6 +24,18 @@
+ #include "cc-multitasking-resources.h"
+ #include "cc-illustrated-row.h"
+ 
++#include "shell/cc-application.h"
++#include "shell/cc-object-storage.h"
++
++#define OVERVIEW_EXT_SCHEMA "org.gnome.shell.extensions.vertical-workspaces"
++#define OVERVIEW_EXT_UUID "vertical-workspaces@zarya.com"
++
++#define GNOME_SHELL_SCHEMA "org.gnome.shell"
++#define GNOME_SHELL_ENABLED_EXTENSIONS "enabled-extensions"
++#define GNOME_SHELL_DISABLED_EXTENSIONS "disabled-extensions"
++
++#define SHELL_EXTENSION_STATE_UNINSTALLED 99
++
+ struct _CcMultitaskingPanel
+ {
+   CcPanel          parent_instance;
+@@ -49,11 +61,29 @@
+   GtkCheckButton  *workspaces_primary_display_radio;
+   GtkCheckButton  *workspaces_span_displays_radio;
+ 
++  AdwViewStackPage  *workspaces_stack_page;
++  GtkCheckButton  *horizontal_layout_radio;
++  GtkCheckButton  *vertical_layout_radio;
++
++  GSettings       *overview_ext_settings;
++  GSettings       *gnome_shell_settings;
++  GDBusProxy      *shell_extensions_proxy;
++
+ };
+ 
+ CC_PANEL_REGISTER (CcMultitaskingPanel, cc_multitasking_panel)
+ 
+ static void
++on_option_click_released_cb (GtkGestureClick *self,
++                             gint             n_press,
++                             gdouble          x,
++                             gdouble          y,
++                             GtkCheckButton  *check_button)
++{
++  gtk_widget_activate (GTK_WIDGET (check_button));
++}
++
++static void
+ keep_dock_settings_in_sync (CcMultitaskingPanel *self)
+ {
+   gboolean switcher_isolate_workspaces;
+@@ -103,9 +133,241 @@
+   g_clear_object (&self->dock_settings);
+   g_clear_object (&self->tiling_assistant_settings);
+   g_clear_object (&self->wm_settings);
++  g_clear_object (&self->gnome_shell_settings);
++  g_clear_object (&self->overview_ext_settings);
++  g_clear_object (&self->shell_extensions_proxy);
+ 
+   G_OBJECT_CLASS (cc_multitasking_panel_parent_class)->finalize (object);
+ }
++static gboolean
++update_panel_visibilty (CcMultitaskingPanel *self)
++{
++  gboolean enabled = FALSE;
++
++  enabled |= adw_view_stack_page_get_visible (self->workspaces_stack_page);
++  return enabled;
++}
++
++static void
++update_extension_widgets (GtkWidget  *extension_stack_page,
++                          GtkWidget  *extension_enable_radio,
++                          GtkWidget  *extension_disable_radio,
++                          const char *uuid,
++                          int         extension_state)
++{
++  enum {
++    STATE_ENABLED = 1,
++    STATE_DISABLED,
++    STATE_ERROR,
++    STATE_OUT_OF_DATE,
++    STATE_DOWNLOADING,
++    STATE_INITIALIZED,
++    STATE_DISABLING,
++    STATE_ENABLING,
++
++    STATE_UNINSTALLED = SHELL_EXTENSION_STATE_UNINSTALLED,
++  };
++
++  switch (extension_state)
++    {
++      case STATE_ENABLED:
++      case STATE_ENABLING:
++      case STATE_DOWNLOADING:
++        g_debug ("Extension %s is enabled (state %d)", uuid, extension_state);
++        gtk_check_button_set_active (extension_enable_radio, TRUE);
++        break;
++      case STATE_INITIALIZED:
++      case STATE_DISABLED:
++      case STATE_DISABLING:
++        g_debug ("Extension %s is not enabled (state %d)", uuid, extension_state);
++        gtk_check_button_set_active (extension_disable_radio, TRUE);
++        break;
++      case STATE_OUT_OF_DATE:
++      case STATE_UNINSTALLED:
++      case STATE_ERROR:
++        g_warning ("Extension %s is not available or invalid (state %d)", uuid, extension_state);
++        adw_view_stack_page_set_visible (extension_stack_page, FALSE);
++        break;
++      default:
++        g_warning ("Unknown extension state for %s: %d\n", uuid, extension_state);
++    }
++}
++
++static void
++on_extensions_listed (GObject *source_object,
++                      GAsyncResult *res,
++                      gpointer user_data)
++{
++  CcMultitaskingPanel *self = user_data;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GVariant) response = NULL;
++  g_autoptr (GVariant) extensions = NULL;
++  GVariantIter iter;
++  GVariant *value;
++  const char *uuid;
++
++  response = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, &error);
++
++  if (error)
++    {
++      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        g_warning ("Failed to get gnome-shell extensions: %s", error->message);
++      return;
++    }
++
++  extensions = g_variant_get_child_value (response, 0);
++
++  double overview_ext_state = SHELL_EXTENSION_STATE_UNINSTALLED;
++
++  g_variant_iter_init (&iter, extensions);
++  while (g_variant_iter_loop (&iter, "{&s@a{sv}}", &uuid, &value))
++    {
++      g_autoptr (GVariantDict) info = NULL;
++
++      if (g_str_equal (uuid, OVERVIEW_EXT_UUID))
++        {
++          info = g_variant_dict_new (value);
++          g_variant_dict_lookup (info, "state", "d", &overview_ext_state);
++        }
++    }
++
++  update_extension_widgets (ADW_VIEW_STACK_PAGE (self->workspaces_stack_page),
++                            GTK_WIDGET (self->vertical_layout_radio),
++                            GTK_WIDGET (self->horizontal_layout_radio),
++                            OVERVIEW_EXT_UUID, overview_ext_state);
++
++  update_panel_visibilty (self);
++}
++
++static void
++shell_extensions_update_visibilty (CcMultitaskingPanel *self)
++{
++  g_dbus_proxy_call (self->shell_extensions_proxy,
++                     "ListExtensions",
++                     NULL, G_DBUS_CALL_FLAGS_NONE,
++                     -1, cc_panel_get_cancellable (CC_PANEL (self)),
++                     (GAsyncReadyCallback) on_extensions_listed, self);
++}
++
++static void
++shell_extensions_proxy_ready (GObject        *source,
++                              GAsyncResult   *res,
++                              CcMultitaskingPanel *self)
++{
++  GDBusProxy *proxy;
++  g_autoptr(GError) error = NULL;
++
++  proxy = cc_object_storage_create_dbus_proxy_finish (res, &error);
++  if (!proxy)
++    {
++      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        g_warning ("Failed to contact gnome-shell extensions: %s", error->message);
++      return;
++    }
++
++  self->shell_extensions_proxy = g_steal_pointer (&proxy);
++  shell_extensions_update_visibilty (self);
++}
++
++static gboolean
++is_extension_disabled (CcMultitaskingPanel *self,
++                       const char    *uuid)
++{
++  g_auto(GStrv) disabled_extensions = NULL;
++
++  disabled_extensions = g_settings_get_strv (self->gnome_shell_settings,
++                                             GNOME_SHELL_DISABLED_EXTENSIONS);
++
++  return g_strv_contains ((const gchar **) disabled_extensions, uuid);
++}
++
++static void
++set_extension_enabled (CcMultitaskingPanel *self,
++                       const char    *uuid,
++                       gboolean       enabled)
++{
++  g_auto(GStrv) disabled_extensions = NULL;
++  g_auto(GStrv) enabled_extensions = NULL;
++  g_autoptr(GPtrArray) enabled_extensions_list = NULL;
++  g_autoptr(GPtrArray) disabled_extensions_list = NULL;
++  guint idx;
++
++  g_settings_delay (self->gnome_shell_settings);
++
++  enabled_extensions = g_settings_get_strv (self->gnome_shell_settings,
++                                            GNOME_SHELL_ENABLED_EXTENSIONS);
++
++  disabled_extensions = g_settings_get_strv (self->gnome_shell_settings,
++                                            GNOME_SHELL_DISABLED_EXTENSIONS);
++
++  enabled_extensions_list = g_ptr_array_new_take_null_terminated ((gpointer *) g_steal_pointer (&enabled_extensions), g_free);
++  disabled_extensions_list = g_ptr_array_new_take_null_terminated ((gpointer *) g_steal_pointer (&disabled_extensions), g_free);
++
++  if (enabled)
++    {
++      if (!g_ptr_array_find_with_equal_func (enabled_extensions_list, uuid,
++                                             g_str_equal, &idx))
++        {
++          g_ptr_array_add (enabled_extensions_list, g_strdup (uuid));
++
++          g_settings_set_strv (self->gnome_shell_settings,
++                               GNOME_SHELL_ENABLED_EXTENSIONS,
++                               (const char **) enabled_extensions_list->pdata);
++        }
++
++      if (g_ptr_array_find_with_equal_func (disabled_extensions_list, uuid,
++                                            g_str_equal, &idx))
++        {
++          g_ptr_array_remove_index (disabled_extensions_list, idx);
++
++          g_settings_set_strv (self->gnome_shell_settings,
++                               GNOME_SHELL_DISABLED_EXTENSIONS,
++                               (const char **) disabled_extensions_list->pdata);
++        }
++    }
++  else
++    {
++      if (g_ptr_array_find_with_equal_func (enabled_extensions_list, uuid,
++                                            g_str_equal, &idx))
++        {
++          g_ptr_array_remove_index (enabled_extensions_list, idx);
++
++          g_settings_set_strv (self->gnome_shell_settings,
++                               GNOME_SHELL_ENABLED_EXTENSIONS,
++                               (const char **) enabled_extensions_list->pdata);
++        }
++
++      if (!g_ptr_array_find_with_equal_func (disabled_extensions_list, uuid,
++                                             g_str_equal, &idx))
++        {
++          g_ptr_array_add (disabled_extensions_list, g_strdup (uuid));
++
++          g_settings_set_strv (self->gnome_shell_settings,
++                               GNOME_SHELL_DISABLED_EXTENSIONS,
++                               (const char **) disabled_extensions_list->pdata);
++        }
++    }
++
++  g_settings_apply (self->gnome_shell_settings);
++}
++
++static void
++update_overview_ext_status (CcMultitaskingPanel *self)
++{
++  gboolean extension_enabled = TRUE;
++
++  if (is_extension_disabled (self, OVERVIEW_EXT_UUID))
++    extension_enabled = FALSE;
++    
++  gtk_check_button_set_active (self->vertical_layout_radio, extension_enabled);
++}
++
++static void
++on_overview_ext_radio_changed (CcMultitaskingPanel *self)
++{
++  set_extension_enabled (self, OVERVIEW_EXT_UUID,
++                         gtk_check_button_get_active (self->vertical_layout_radio));
++}
+ 
+ static void
+ cc_multitasking_panel_class_init (CcMultitaskingPanelClass *klass)
+@@ -130,9 +392,15 @@
+   gtk_widget_class_bind_template_child (widget_class, CcMultitaskingPanel, number_of_workspaces_spin);
+   gtk_widget_class_bind_template_child (widget_class, CcMultitaskingPanel, workspaces_primary_display_radio);
+   gtk_widget_class_bind_template_child (widget_class, CcMultitaskingPanel, workspaces_span_displays_radio);
++  gtk_widget_class_bind_template_child (widget_class, CcMultitaskingPanel, workspaces_stack_page);
++  gtk_widget_class_bind_template_child (widget_class, CcMultitaskingPanel, vertical_layout_radio);
++  gtk_widget_class_bind_template_child (widget_class, CcMultitaskingPanel, horizontal_layout_radio);
+ 
+   gtk_widget_class_bind_template_child (widget_class, CcMultitaskingPanel, dock_monitors_isolation_radio);
+   gtk_widget_class_bind_template_child (widget_class, CcMultitaskingPanel, dock_each_monitor_radio);
++
++  gtk_widget_class_bind_template_callback (widget_class, on_overview_ext_radio_changed);
++  gtk_widget_class_bind_template_callback (widget_class, on_option_click_released_cb);
+ }
+ 
+ static void
+@@ -145,6 +413,15 @@
+ 
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
++  const gchar *desktop_list = g_getenv ("XDG_CURRENT_DESKTOP");
++  g_auto(GStrv) desktops = NULL;
++  if (desktop_list)
++    desktops = g_strsplit (desktop_list, ":", 0);
++  if (desktops && g_strv_contains ((const gchar * const *) desktops, "zarya"))
++    adw_view_stack_page_set_visible (self->workspaces_stack_page, TRUE);
++  else
++    adw_view_stack_page_set_visible (self->workspaces_stack_page, FALSE);
++
+   self->interface_settings = g_settings_new ("org.gnome.desktop.interface");
+   g_settings_bind (self->interface_settings,
+                    "enable-hot-corners",
+@@ -209,6 +486,56 @@
+                                        "/org/gnome/control-center/multitasking/assets/active-screen-edges-rtl.svg");
+     }
+ 
++  schema = g_settings_schema_source_lookup (schema_source, GNOME_SHELL_SCHEMA, TRUE);
++  if (schema)
++    {
++      self->gnome_shell_settings = g_settings_new_full (schema, NULL, NULL);
++    }
++  else
++    {
++      g_warning ("No GNOME Shell is installed here. Please fix your installation.");
++    }
++
++  schema = g_settings_schema_source_lookup (schema_source, OVERVIEW_EXT_SCHEMA, TRUE);
++  if(schema && self->gnome_shell_settings)
++  {
++    self->overview_ext_settings = g_settings_new_full (schema, NULL, NULL);
++
++    g_signal_connect_object (self->gnome_shell_settings,
++                             "changed::" GNOME_SHELL_ENABLED_EXTENSIONS,
++                              G_CALLBACK (update_overview_ext_status),
++                              self,
++                              G_CONNECT_SWAPPED);
++
++    g_signal_connect_object (self->gnome_shell_settings,
++                             "changed::" GNOME_SHELL_DISABLED_EXTENSIONS,
++                             G_CALLBACK (update_overview_ext_status),
++                             self,
++                             G_CONNECT_SWAPPED);
++
++  update_overview_ext_status (self);
++
++  g_clear_pointer (&schema, g_settings_schema_unref);
++  }
++  else
++    {
++      g_debug ("No Overview ext is installed here. Workspaces Page disabled.");
++      adw_view_stack_page_set_visible (self->workspaces_stack_page, FALSE);
++    }
++
++  if (!update_panel_visibilty (self))
++    return;
++  
++  cc_object_storage_create_dbus_proxy (G_BUS_TYPE_SESSION,
++                                       G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES |
++                                       G_DBUS_PROXY_FLAGS_DO_NOT_CONNECT_SIGNALS,
++                                       "org.gnome.Shell.Extensions",
++                                       "/org/gnome/Shell/Extensions",
++                                       "org.gnome.Shell.Extensions",
++                                       cc_panel_get_cancellable (CC_PANEL (self)),
++                                       (GAsyncReadyCallback) shell_extensions_proxy_ready,
++                                       self);
++
+   schema = g_settings_schema_source_lookup (schema_source,
+                                             "org.gnome.shell.extensions.dash-to-dock",
+                                             TRUE);
+--- a/panels/multitasking/cc-multitasking-panel.ui
++++ b/panels/multitasking/cc-multitasking-panel.ui
+@@ -1,210 +1,405 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+ <interface>
+   <template class="CcMultitaskingPanel" parent="CcPanel">
++
++    <child type="titlebar">
++      <object class="AdwHeaderBar">
++        <property name="show-end-title-buttons">True</property>
++        <property name="show-start-title-buttons">False</property>
++        <property name="title-widget">
++          <object class="AdwViewSwitcherTitle">
++            <property name="title" bind-source="CcMultitaskingPanel" bind-property="title" bind-flags="default|sync-create" />
++            <property name="stack">stack</property>
++          </object>
++        </property>
++        <child type="start">
++          <object class="GtkButton">
++            <property name="visible" bind-source="CcMultitaskingPanel" bind-property="folded" bind-flags="default|sync-create" />
++            <property name="icon-name">go-previous-symbolic</property>
++            <property name="action-name">window.navigate</property>
++            <property name="action-target">0</property> <!-- 0: ADW_NAVIGATION_DIRECTION_BACK -->
++            <accessibility>
++              <property name="label" translatable="yes">Back</property>
++            </accessibility>
++          </object>
++        </child>
++        
++      </object>
++    </child>
++
+     <child type="content">
+-      <object class="AdwPreferencesPage">
++      <object class="AdwViewStack" id="stack">
+ 
+         <child>
+-          <object class="AdwPreferencesGroup">
++          <object class="AdwViewStackPage" id="general_stack_page">
+             <property name="title" translatable="yes">General</property>
++            <property name="icon-name">org.gnome.Settings-multitasking-symbolic</property>
++            <property name="child">
+ 
+-            <!-- Hot Corner -->
+-            <child>
+-              <object class="CcIllustratedRow" id="hot_corner_row">
+-                <property name="activatable-widget">hot_corner_switch</property>
+-                <property name="title" translatable="yes">_Hot Corner</property>
+-                <property name="subtitle" translatable="yes">Touch the top-left corner to open the Activities Overview.</property>
+-                <property name="use_underline">True</property>
+-                <property name="resource">/org/gnome/control-center/multitasking/assets/hot-corner.svg</property>
++              <object class="AdwPreferencesPage">
+                 <child>
+-                  <object class="GtkSwitch" id="hot_corner_switch">
+-                    <property name="valign">center</property>
+-                  </object>
+-                </child>
+-              </object>
+-            </child>
++                  <object class="AdwPreferencesGroup">
++                    <property name="title" translatable="yes">General</property>
+ 
+-            <!-- Active Screen Edges -->
+-            <child>
+-              <object class="CcIllustratedRow" id="active_screen_edges_row">
+-                <property name="activatable-widget">active_screen_edges_switch</property>
+-                <property name="title" translatable="yes">_Active Screen Edges</property>
+-                <property name="subtitle" translatable="yes">Drag windows against the top, left, and right screen edges to resize them.</property>
+-                <property name="use_underline">True</property>
+-                <property name="resource">/org/gnome/control-center/multitasking/assets/active-screen-edges.svg</property>
+-                <child>
+-                  <object class="GtkSwitch" id="active_screen_edges_switch">
+-                    <property name="valign">center</property>
+-                  </object>
+-                </child>
+-              </object>
+-            </child>
++                    <!-- Hot Corner -->
++                    <child>
++                      <object class="CcIllustratedRow" id="hot_corner_row">
++                        <property name="activatable-widget">hot_corner_switch</property>
++                        <property name="title" translatable="yes">_Hot Corner</property>
++                        <property name="subtitle" translatable="yes">Touch the top-left corner to open the Activities Overview.</property>
++                        <property name="use_underline">True</property>
++                        <property name="resource">/org/gnome/control-center/multitasking/assets/hot-corner.svg</property>
++                        <child>
++                          <object class="GtkSwitch" id="hot_corner_switch">
++                            <property name="valign">center</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++
++                    <!-- Active Screen Edges -->
++                    <child>
++                      <object class="CcIllustratedRow" id="active_screen_edges_row">
++                        <property name="activatable-widget">active_screen_edges_switch</property>
++                        <property name="title" translatable="yes">_Active Screen Edges</property>
++                        <property name="subtitle" translatable="yes">Drag windows against the top, left, and right screen edges to resize them.</property>
++                        <property name="use_underline">True</property>
++                        <property name="resource">/org/gnome/control-center/multitasking/assets/active-screen-edges.svg</property>
++                        <child>
++                          <object class="GtkSwitch" id="active_screen_edges_switch">
++                            <property name="valign">center</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
+ 
+-          </object>
+-        </child>
+-
+-        <child>
+-          <object class="AdwPreferencesGroup">
+-            <property name="title" translatable="yes">Workspaces</property>
+-
+-            <!-- Dynamic Workspaces -->
+-            <child>
+-              <object class="AdwActionRow">
+-                <property name="activatable-widget">dynamic_workspaces_radio</property>
+-                <property name="title" translatable="yes">_Dynamic workspaces</property>
+-                <property name="subtitle" translatable="yes">Automatically removes empty workspaces.</property>
+-                <property name="use_underline">True</property>
+-                <child type="prefix">
+-                  <object class="GtkCheckButton" id="dynamic_workspaces_radio">
+-                    <property name="valign">center</property>
+                   </object>
+                 </child>
+-              </object>
+-            </child>
+ 
+-            <!-- Fixed Number of Workspaces -->
+-            <child>
+-              <object class="AdwActionRow">
+-                <property name="activatable-widget">fixed_workspaces_radio</property>
+-                <property name="title" translatable="yes">_Fixed number of workspaces</property>
+-                <property name="subtitle" translatable="yes">Specify a number of permanent workspaces.</property>
+-                <property name="use_underline">True</property>
+-                <child type="prefix">
+-                  <object class="GtkCheckButton" id="fixed_workspaces_radio">
+-                    <property name="valign">center</property>
+-                    <property name="group">dynamic_workspaces_radio</property>
+-                  </object>
+-                </child>
+-              </object>
+-            </child>
+-
+-            <!-- Number of Workspaces -->
+-            <child>
+-              <object class="AdwActionRow">
+-                <property name="sensitive" bind-source="fixed_workspaces_radio" bind-property="active" bind-flags="default|sync-create" />
+-                <property name="activatable-widget">number_of_workspaces_spin</property>
+-                <property name="title" translatable="yes">_Number of Workspaces</property>
+-                <property name="use_underline">True</property>
+                 <child>
+-                  <object class="GtkSpinButton" id="number_of_workspaces_spin">
+-                    <property name="valign">center</property>
+-                    <property name="adjustment">workspaces_adjustment</property>
+-                  </object>
+-                </child>
+-              </object>
+-            </child>
++                  <object class="AdwPreferencesGroup">
++                    <property name="title" translatable="yes">Workspaces</property>
+ 
+-          </object>
+-        </child>
+-
+-        <child>
+-          <object class="AdwPreferencesGroup">
+-            <property name="title" translatable="yes">Multi-Monitor</property>
+-
+-            <!-- Primary Display -->
+-            <child>
+-              <object class="CcIllustratedRow">
+-                <property name="activatable-widget">workspaces_primary_display_radio</property>
+-                <property name="title" translatable="yes">Workspaces on _primary display only</property>
+-                <property name="use_underline">True</property>
+-                <property name="resource">/org/gnome/control-center/multitasking/assets/workspaces-primary-display.svg</property>
+-                <child type="prefix">
+-                  <object class="GtkCheckButton" id="workspaces_primary_display_radio">
+-                    <property name="valign">center</property>
+-                  </object>
+-                </child>
+-              </object>
+-            </child>
++                    <!-- Dynamic Workspaces -->
++                    <child>
++                      <object class="AdwActionRow">
++                        <property name="activatable-widget">dynamic_workspaces_radio</property>
++                        <property name="title" translatable="yes">_Dynamic workspaces</property>
++                        <property name="subtitle" translatable="yes">Automatically removes empty workspaces.</property>
++                        <property name="use_underline">True</property>
++                        <child type="prefix">
++                          <object class="GtkCheckButton" id="dynamic_workspaces_radio">
++                            <property name="valign">center</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++
++                    <!-- Fixed Number of Workspaces -->
++                    <child>
++                      <object class="AdwActionRow">
++                        <property name="activatable-widget">fixed_workspaces_radio</property>
++                        <property name="title" translatable="yes">_Fixed number of workspaces</property>
++                        <property name="subtitle" translatable="yes">Specify a number of permanent workspaces.</property>
++                        <property name="use_underline">True</property>
++                        <child type="prefix">
++                          <object class="GtkCheckButton" id="fixed_workspaces_radio">
++                            <property name="valign">center</property>
++                            <property name="group">dynamic_workspaces_radio</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++
++                    <!-- Number of Workspaces -->
++                    <child>
++                      <object class="AdwActionRow">
++                        <property name="sensitive" bind-source="fixed_workspaces_radio" bind-property="active" bind-flags="default|sync-create" />
++                        <property name="activatable-widget">number_of_workspaces_spin</property>
++                        <property name="title" translatable="yes">_Number of Workspaces</property>
++                        <property name="use_underline">True</property>
++                        <child>
++                          <object class="GtkSpinButton" id="number_of_workspaces_spin">
++                            <property name="valign">center</property>
++                            <property name="adjustment">workspaces_adjustment</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
+ 
+-            <!-- Span Displays -->
+-            <child>
+-              <object class="CcIllustratedRow">
+-                <property name="activatable-widget">workspaces_span_displays_radio</property>
+-                <property name="title" translatable="yes">Workspaces on all d_isplays</property>
+-                <property name="use_underline">True</property>
+-                <property name="resource">/org/gnome/control-center/multitasking/assets/workspaces-span-displays.svg</property>
+-                <child type="prefix">
+-                  <object class="GtkCheckButton" id="workspaces_span_displays_radio">
+-                    <property name="valign">center</property>
+-                    <property name="group">workspaces_primary_display_radio</property>
+                   </object>
+                 </child>
+-              </object>
+-            </child>
+ 
+-          </object>
+-        </child>
+-
+-        <child>
+-          <object class="AdwPreferencesGroup">
+-            <property name="title" translatable="yes">App Switching</property>
++                <child>
++                  <object class="AdwPreferencesGroup">
++                    <property name="title" translatable="yes">Multi-Monitor</property>
+ 
+-            <!-- All Workspaces -->
+-            <child>
+-              <object class="AdwActionRow">
+-                <property name="activatable-widget">all_workspaces_radio</property>
+-                <property name="title" translatable="yes">Include apps from all _workspaces</property>
+-                <property name="use_underline">True</property>
+-                <child type="prefix">
+-                  <object class="GtkCheckButton" id="all_workspaces_radio">
+-                    <property name="valign">center</property>
+-                  </object>
+-                </child>
+-              </object>
+-            </child>
++                    <!-- Primary Display -->
++                    <child>
++                      <object class="CcIllustratedRow">
++                        <property name="activatable-widget">workspaces_primary_display_radio</property>
++                        <property name="title" translatable="yes">Workspaces on _primary display only</property>
++                        <property name="use_underline">True</property>
++                        <property name="resource">/org/gnome/control-center/multitasking/assets/workspaces-primary-display.svg</property>
++                        <child type="prefix">
++                          <object class="GtkCheckButton" id="workspaces_primary_display_radio">
++                            <property name="valign">center</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++
++                    <!-- Span Displays -->
++                    <child>
++                      <object class="CcIllustratedRow">
++                        <property name="activatable-widget">workspaces_span_displays_radio</property>
++                        <property name="title" translatable="yes">Workspaces on all d_isplays</property>
++                        <property name="use_underline">True</property>
++                        <property name="resource">/org/gnome/control-center/multitasking/assets/workspaces-span-displays.svg</property>
++                        <child type="prefix">
++                          <object class="GtkCheckButton" id="workspaces_span_displays_radio">
++                            <property name="valign">center</property>
++                            <property name="group">workspaces_primary_display_radio</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
+ 
+-            <!-- Current Workspace -->
+-            <child>
+-              <object class="AdwActionRow">
+-                <property name="activatable-widget">current_workspace_radio</property>
+-                <property name="title" translatable="yes">Include apps from the _current workspace only</property>
+-                <property name="use_underline">True</property>
+-                <child type="prefix">
+-                  <object class="GtkCheckButton" id="current_workspace_radio">
+-                    <property name="valign">center</property>
+-                    <property name="group">all_workspaces_radio</property>
+                   </object>
+                 </child>
+-              </object>
+-            </child>
+ 
+-          </object>
+-        </child>
++                <child>
++                  <object class="AdwPreferencesGroup">
++                    <property name="title" translatable="yes">App Switching</property>
+ 
+-        <child>
+-          <object class="AdwPreferencesGroup" id="monitor_isolation_group">
++                    <!-- All Workspaces -->
++                    <child>
++                      <object class="AdwActionRow">
++                        <property name="activatable-widget">all_workspaces_radio</property>
++                        <property name="title" translatable="yes">Include apps from all _workspaces</property>
++                        <property name="use_underline">True</property>
++                        <child type="prefix">
++                          <object class="GtkCheckButton" id="all_workspaces_radio">
++                            <property name="valign">center</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++
++                    <!-- Current Workspace -->
++                    <child>
++                      <object class="AdwActionRow">
++                        <property name="activatable-widget">current_workspace_radio</property>
++                        <property name="title" translatable="yes">Include apps from the _current workspace only</property>
++                        <property name="use_underline">True</property>
++                        <child type="prefix">
++                          <object class="GtkCheckButton" id="current_workspace_radio">
++                            <property name="valign">center</property>
++                            <property name="group">all_workspaces_radio</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
+ 
+-            <!-- All Monitors -->
+-            <child>
+-              <object class="AdwActionRow">
+-                <property name="activatable-widget">dock_monitors_isolation_radio</property>
+-                <property name="title" translatable="yes">Include apps from all _monitors</property>
+-                <property name="use_underline">True</property>
+-                <child type="prefix">
+-                  <object class="GtkCheckButton" id="dock_monitors_isolation_radio">
+-                    <property name="valign">center</property>
+                   </object>
+                 </child>
+-              </object>
+-            </child>
+ 
+-            <!-- Monitor Isolation -->
+-            <child>
+-              <object class="AdwActionRow">
+-                <property name="activatable-widget">dock_each_monitor_radio</property>
+-                <property name="title" translatable="yes">Include apps from _each monitor only</property>
+-                <property name="use_underline">True</property>
+-                <child type="prefix">
+-                  <object class="GtkCheckButton" id="dock_each_monitor_radio">
+-                    <property name="valign">center</property>
+-                    <property name="group">dock_monitors_isolation_radio</property>
+-                  </object>
+-                </child>
+-              </object>
+-            </child>
++                <child>
++                  <object class="AdwPreferencesGroup" id="monitor_isolation_group">
+ 
+-          </object>
+-        </child>
++                    <!-- All Monitors -->
++                    <child>
++                      <object class="AdwActionRow">
++                        <property name="activatable-widget">dock_monitors_isolation_radio</property>
++                        <property name="title" translatable="yes">Include apps from all _monitors</property>
++                        <property name="use_underline">True</property>
++                        <child type="prefix">
++                          <object class="GtkCheckButton" id="dock_monitors_isolation_radio">
++                            <property name="valign">center</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++
++                    <!-- Monitor Isolation -->
++                    <child>
++                      <object class="AdwActionRow">
++                        <property name="activatable-widget">dock_each_monitor_radio</property>
++                        <property name="title" translatable="yes">Include apps from _each monitor only</property>
++                        <property name="use_underline">True</property>
++                        <child type="prefix">
++                          <object class="GtkCheckButton" id="dock_each_monitor_radio">
++                            <property name="valign">center</property>
++                            <property name="group">dock_monitors_isolation_radio</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++
++                  </object>
++                </child>
++
++            </object>
++          </property>
++        </object>
++      </child>
++
++      <child>
++        <object class="AdwViewStackPage" id="workspaces_stack_page">
++          <property name="visible">False</property>
++          <property name="name">workspaces</property>
++          <property name="icon-name">overlapping-windows-symbolic</property>
++          <property name="title" translatable="yes">Overview</property>
++          <property name="child">
++            <object class="AdwPreferencesPage">
++              <child>
++                <object class="AdwPreferencesGroup">
++                  <property name="title" translatable="yes">Orientation</property>
++                  <child>
++                    <object class="CcVerticalRow">
++                      <child type="content">
++                        <object class="GtkBox">
++                          <property name="hexpand">True</property>
++                          <property name="homogeneous">True</property>
++                          <property name="spacing">24</property>
++                          <property name="margin-top">12</property>
++                          <property name="margin-bottom">12</property>
++                          <child>
++                            <object class="GtkBox">
++                              <property name="spacing">12</property>
++                              <property name="orientation">vertical</property>
++                              <child>
++                                <object class="GtkGestureClick">
++                                  <signal name="released" handler="on_option_click_released_cb" object="horizontal_layout_radio" swapped="no" />
++                                </object>
++                              </child>
++                              <child>
++                                <object class="AdwBin">
++                                  <style>
++                                    <class name="background"/>
++                                    <class name="frame"/>
++                                  </style>
++                                  <child>
++                                    <object class="GtkPicture">
++                                      <property name="hexpand">True</property>
++                                      <property name="halign">center</property>
++                                      <property name="margin-top">18</property>
++                                      <property name="margin-bottom">18</property>
++                                      <property name="margin-start">18</property>
++                                      <property name="margin-end">18</property>
++                                      <property name="height-request">128</property>
++                                      <property name="file">resource:///org/gnome/control-center/overview/assets/horizontal.svg</property>
++                                    </object>
++                                  </child>
++                                </object>
++                              </child>
++                              <child>
++                                <object class="GtkCheckButton" id="horizontal_layout_radio">
++                                  <property name="margin-start">6</property>
++                                  <signal name="notify::active" handler="on_overview_ext_radio_changed" swapped="true"/>
++                                  <property name="child">
++                                    <object class="GtkBox">
++                                      <property name="valign">center</property>
++                                      <property name="margin-start">6</property>
++                                      <property name="orientation">vertical</property>
++                                      <child>
++                                        <object class="GtkLabel">
++                                          <property name="xalign">0.0</property>
++                                          <property name="label" translatable="yes">Default</property>
++                                          <style>
++                                            <class name="title" />
++                                          </style>
++                                        </object>
++                                      </child>
++                                      <child>
++                                        <object class="GtkLabel">
++                                          <property name="xalign">0.0</property>
++                                          <property name="label" translatable="yes">Workspaces are arranged horizontally</property>
++                                          <style>
++                                            <class name="subtitle" />
++                                          </style>
++                                        </object>
++                                      </child>
++                                    </object>
++                                  </property>
++                                </object>
++                              </child>
++                            </object>
++                          </child>
++                          <child>
++                            <object class="GtkBox">
++                              <property name="spacing">12</property>
++                              <property name="orientation">vertical</property>
++                              <child>
++                                <object class="GtkGestureClick">
++                                  <signal name="released" handler="on_option_click_released_cb" object="vertical_layout_radio" swapped="no" />
++                                </object>
++                              </child>
++                              <child>
++                                <object class="AdwBin">
++                                  <style>
++                                    <class name="background"/>
++                                    <class name="frame"/>
++                                  </style>
++                                  <child>
++                                    <object class="GtkPicture">
++                                      <property name="hexpand">True</property>
++                                      <property name="halign">center</property>
++                                      <property name="margin-top">18</property>
++                                      <property name="margin-bottom">18</property>
++                                      <property name="margin-start">18</property>
++                                      <property name="margin-end">18</property>
++                                      <property name="height-request">128</property>
++                                      <property name="file">resource:///org/gnome/control-center/overview/assets/vertical.svg</property>
++                                    </object>
++                                  </child>
++                                </object>
++                              </child>
++                              <child>
++                                <object class="GtkCheckButton" id="vertical_layout_radio">
++                                  <property name="margin-start">6</property>
++                                  <property name="group">horizontal_layout_radio</property>
++                                  <signal name="notify::active" handler="on_overview_ext_radio_changed" swapped="true"/>
++                                  <property name="child">
++                                    <object class="GtkBox">
++                                      <property name="valign">center</property>
++                                      <property name="margin-start">6</property>
++                                      <property name="orientation">vertical</property>
++                                      <child>
++                                        <object class="GtkLabel">
++                                          <property name="xalign">0.0</property>
++                                          <property name="label" translatable="yes">Vertical</property>
++                                          <style>
++                                            <class name="title" />
++                                          </style>
++                                        </object>
++                                      </child>
++                                      <child>
++                                        <object class="GtkLabel">
++                                          <property name="xalign">0.0</property>
++                                          <property name="label" translatable="yes">Workspaces are arranged vertically</property>
++                                          <style>
++                                            <class name="subtitle" />
++                                          </style>
++                                        </object>
++                                      </child>
++                                    </object>
++                                  </property>
++                                </object>
++                              </child>
++                            </object>
++                          </child>
++                        </object>
++                      </child>
++                    </object>
++                  </child>
++                </object>
++              </child>
++
++            </object>
++          </property>
++        </object>
++      </child>
+ 
+       </object>
+     </child>
+--- a/panels/multitasking/icons/meson.build
++++ b/panels/multitasking/icons/meson.build
+@@ -2,3 +2,8 @@
+   'scalable/org.gnome.Settings-multitasking-symbolic.svg',
+   install_dir: join_paths(control_center_icondir, 'hicolor', 'scalable', 'apps')
+ )
++
++install_data(
++  'scalable/overlapping-windows-symbolic.svg',
++  install_dir: join_paths(control_center_icondir, 'hicolor', 'scalable', 'apps')
++)
+--- /dev/null
++++ b/panels/multitasking/icons/scalable/overlapping-windows-symbolic.svg
+@@ -0,0 +1,49 @@
++<?xml version="1.0" encoding="UTF-8" standalone="no"?>
++<svg
++   height="16px"
++   viewBox="0 0 16 16"
++   width="16px"
++   version="1.1"
++   id="svg4"
++   sodipodi:docname="overlapping-windows-symbolic.svg"
++   inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
++   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
++   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
++   xmlns="http://www.w3.org/2000/svg"
++   xmlns:svg="http://www.w3.org/2000/svg">
++  <defs
++     id="defs8" />
++  <sodipodi:namedview
++     id="namedview6"
++     pagecolor="#ffffff"
++     bordercolor="#000000"
++     borderopacity="0.25"
++     inkscape:showpageshadow="2"
++     inkscape:pageopacity="0.0"
++     inkscape:pagecheckerboard="0"
++     inkscape:deskcolor="#d1d1d1"
++     showgrid="true"
++     inkscape:zoom="40.5"
++     inkscape:cx="8.0123457"
++     inkscape:cy="9.9753086"
++     inkscape:window-width="1536"
++     inkscape:window-height="795"
++     inkscape:window-x="1920"
++     inkscape:window-y="248"
++     inkscape:window-maximized="1"
++     inkscape:current-layer="svg4">
++    <inkscape:grid
++       type="xygrid"
++       id="grid180" />
++  </sodipodi:namedview>
++  <g
++     id="g184"
++     transform="translate(-3.9012346,1.7283951)">
++    <path
++       d="m 6.9012346,-0.72839506 c -1.644531,0 -3,1.355469 -3,2.99999996 v 4 c 0,1.644531 1.355469,3 3,3 h 2 v -2 h -2 c -0.570312,0 -1,-0.429688 -1,-1 v -4 c 0,-0.570312 0.429688,-1 1,-1 h 6.0000004 c 0.570312,0 1,0.429688 1,1 v 2 h 2 v -2 c 0,-1.64453096 -1.355469,-2.99999996 -3,-2.99999996 z m 0,0"
++       id="path168" />
++    <path
++       d="m 10.901235,3.2716049 c -1.6445314,0 -3.0000004,1.355469 -3.0000004,3 v 4.0000001 c 0,1.644531 1.355469,3 3.0000004,3 h 6 c 1.644531,0 3,-1.355469 3,-3 V 6.2716049 c 0,-1.644531 -1.355469,-3 -3,-3 z m 0,2 h 6 c 0.570312,0 1,0.429688 1,1 v 4.0000001 c 0,0.570312 -0.429688,1 -1,1 h -6 c -0.570312,0 -1.0000004,-0.429688 -1.0000004,-1 V 6.2716049 c 0,-0.570312 0.4296884,-1 1.0000004,-1 z m 0,0"
++       id="path170" />
++  </g>
++</svg>
